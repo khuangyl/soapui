@@ -16,33 +16,6 @@
 
 package com.eviware.soapui.impl.wsdl.support.wss.entries;
 
-import java.awt.event.ItemEvent;
-import java.awt.event.ItemListener;
-import java.io.StringWriter;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Vector;
-
-import javax.swing.JComponent;
-import javax.swing.JScrollPane;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.dom.DOMResult;
-import javax.xml.transform.dom.DOMSource;
-
-import org.apache.ws.security.WSConstants;
-import org.apache.ws.security.WSEncryptionPart;
-import org.apache.ws.security.WSSecurityException;
-import org.apache.ws.security.message.DOMCallbackLookup;
-import org.apache.ws.security.message.WSSecHeader;
-import org.apache.ws.security.message.WSSecSignature;
-import org.apache.xml.security.algorithms.MessageDigestAlgorithm;
-import org.apache.xml.security.signature.XMLSignature;
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-
 import com.eviware.soapui.SoapUI;
 import com.eviware.soapui.config.WSSEntryConfig;
 import com.eviware.soapui.impl.wsdl.support.wss.OutgoingWss;
@@ -58,6 +31,36 @@ import com.eviware.soapui.support.xml.XmlObjectConfigurationBuilder;
 import com.eviware.soapui.support.xml.XmlObjectConfigurationReader;
 import com.eviware.soapui.support.xml.XmlUtils;
 import com.jgoodies.binding.PresentationModel;
+import org.apache.ws.security.WSConstants;
+import org.apache.ws.security.WSEncryptionPart;
+import org.apache.ws.security.WSSConfig;
+import org.apache.ws.security.WSSecurityException;
+import org.apache.ws.security.components.crypto.Crypto;
+import org.apache.ws.security.message.DOMCallbackLookup;
+import org.apache.ws.security.message.WSSecHeader;
+import org.apache.ws.security.message.WSSecSignature;
+import org.apache.ws.security.util.WSSecurityUtil;
+import org.apache.xml.security.algorithms.MessageDigestAlgorithm;
+import org.apache.xml.security.signature.XMLSignature;
+import org.mortbay.log.Log;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+
+import javax.swing.JComponent;
+import javax.swing.JScrollPane;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMResult;
+import javax.xml.transform.dom.DOMSource;
+import java.awt.event.ItemEvent;
+import java.awt.event.ItemListener;
+import java.io.StringWriter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Vector;
 
 public class SignatureEntry extends WssEntryBase {
     private static final String DEFAULT_OPTION = "<default>";
@@ -66,6 +69,7 @@ public class SignatureEntry extends WssEntryBase {
     private int keyIdentifierType = 0;
     private String signatureAlgorithm;
     private boolean useSingleCert;
+    private boolean bspCompliant;
     private String signatureCanonicalization;
     private String digestAlgorithm;
     private List<StringToStringMap> parts = new ArrayList<StringToStringMap>();
@@ -112,12 +116,14 @@ public class SignatureEntry extends WssEntryBase {
                 WSConstants.C14N_EXCL_WITH_COMMENTS}, "Set the canonicalization method to use.");
 
         form.appendComboBox("digestAlgorithm", "Digest Algorithm", new String[]{DEFAULT_OPTION,
-                MessageDigestAlgorithm.ALGO_ID_DIGEST_NOT_RECOMMENDED_MD5, MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA1,
-                MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA256, MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA384,
-                MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA512, MessageDigestAlgorithm.ALGO_ID_DIGEST_RIPEMD160},
+                        MessageDigestAlgorithm.ALGO_ID_DIGEST_NOT_RECOMMENDED_MD5, MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA1,
+                        MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA256, MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA384,
+                        MessageDigestAlgorithm.ALGO_ID_DIGEST_SHA512, MessageDigestAlgorithm.ALGO_ID_DIGEST_RIPEMD160},
                 "Set the digest algorithm to use");
 
         form.appendCheckBox("useSingleCert", "Use Single Certificate", "Use single certificate for signing");
+
+        form.appendCheckBox("bspCompliant", "BSP Compliant", "Enable Basic Security Profile compliancy");
 
         form.append("Parts", new WSPartsTable(parts, this));
 
@@ -138,6 +144,7 @@ public class SignatureEntry extends WssEntryBase {
         signatureAlgorithm = reader.readString("signatureAlgorithm", null);
         signatureCanonicalization = reader.readString("signatureCanonicalization", null);
         useSingleCert = reader.readBoolean("useSingleCert", false);
+        bspCompliant = reader.readBoolean("bspCompliant", true);
 
         digestAlgorithm = reader.readString("digestAlgorithm", null);
 
@@ -151,6 +158,7 @@ public class SignatureEntry extends WssEntryBase {
         builder.add("signatureAlgorithm", signatureAlgorithm);
         builder.add("signatureCanonicalization", signatureCanonicalization);
         builder.add("useSingleCert", useSingleCert);
+        builder.add("bspCompliant", bspCompliant);
 
         builder.add("digestAlgorithm", digestAlgorithm);
 
@@ -166,7 +174,7 @@ public class SignatureEntry extends WssEntryBase {
                 throw new Exception("Missing crypto [" + crypto + "] for signature entry");
             }
 
-            WSSecSignature wssSign = new WSSecSignature();
+            WSSecSignature wssSign = new WSSecSignatureRA();
             wssSign.setUserInfo(context.expand(getUsername()), context.expand(getPassword()));
 
             // default is
@@ -193,6 +201,8 @@ public class SignatureEntry extends WssEntryBase {
             if (!wsParts.isEmpty()) {
                 wssSign.setParts(wsParts);
             }
+
+            wssSign.getWsConfig().setWsiBSPCompliant(bspCompliant);
 
             writer = new StringWriter();
             XmlUtils.serialize(doc, writer);
@@ -284,6 +294,14 @@ public class SignatureEntry extends WssEntryBase {
         saveConfig();
     }
 
+    public boolean isBspCompliant() {
+        return bspCompliant;
+    }
+
+    public void setBspCompliant(boolean bspCompliant) {
+        this.bspCompliant = bspCompliant;
+    }
+
     public void setParts(List<StringToStringMap> parts) {
         this.parts = parts;
         saveConfig();
@@ -331,6 +349,55 @@ public class SignatureEntry extends WssEntryBase {
                 }
             }
             return elements;
+        }
+    }
+
+    private class WSSecSignatureRA extends WSSecSignature {
+
+        public WSSecSignatureRA() {
+            super();
+        }
+
+        public WSSecSignatureRA(WSSConfig config) {
+            super(config);
+        }
+
+        @Override
+        public void prepare(Document doc, Crypto cr, WSSecHeader secHeader) throws WSSecurityException {
+            super.prepare(doc, cr, secHeader);
+        }
+
+        @Override
+        public final Document build(Document doc, Crypto cr, WSSecHeader secHeader) throws WSSecurityException {
+            this.doDebug = Log.isDebugEnabled();
+            if(this.doDebug) {
+                Log.debug("Beginning signing...");
+            }
+
+            this.prepare(doc, cr, secHeader);
+            WSEncryptionPart part;
+            if(this.parts == null) {
+                this.parts = new ArrayList(1);
+                String referenceList = WSSecurityUtil.getSOAPNamespace(doc.getDocumentElement());
+                part = new WSEncryptionPart("Body", referenceList, "Content");
+                this.parts.add(part);
+            } else {
+                Iterator referenceList1 = this.parts.iterator();
+
+                while(referenceList1.hasNext()) {
+                    part = (WSEncryptionPart)referenceList1.next();
+                    if("STRTransform".equals(part.getName()) && part.getId() == null) {
+                        part.setId(this.strUri);
+                    }
+                }
+            }
+
+            List referenceList2 = this.addReferencesToSign(this.parts, secHeader);
+            this.computeSignature(referenceList2, false, (Element)null);
+            if(this.bstToken != null) {
+                this.prependBSTElementToHeader(secHeader);
+            }
+            return doc;
         }
     }
 }
