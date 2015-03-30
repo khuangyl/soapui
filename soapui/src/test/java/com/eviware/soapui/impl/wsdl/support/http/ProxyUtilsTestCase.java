@@ -79,6 +79,7 @@ public class ProxyUtilsTestCase {
 
     @After
     public void teardown() {
+        clearProxySystemProperties();
         ProxyUtils.setAutoProxy(false);
         ProxyUtils.setProxyEnabled(false);
     }
